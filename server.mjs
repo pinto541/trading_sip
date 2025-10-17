@@ -1,74 +1,91 @@
-// server.js
+// server.mjs
 import express from "express";
-import nodemailer from "nodemailer";
 import cors from "cors";
+import multer from "multer";
 import dotenv from "dotenv";
+import sgMail from "@sendgrid/mail";
 
 dotenv.config();
+
 const app = express();
+const PORT = process.env.PORT || 2000;
+
+// Middleware
 app.use(cors());
-app.use(express.json()); // to parse JSON from frontend
+app.use(express.json());
 
+// Multer config for file uploads
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
 
-    const transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST,
-      port: process.env.EMAIL_PORT,
-      secure: false, // true for 465, false for other ports
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS, // app password if using Gmail
-      },
-    });
+// SendGrid setup
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+const EMAIL_TO = process.env.EMAIL_TO;
+const EMAIL_FROM = process.env.EMAIL_FROM; // must be a verified sender in SendGrid
 
-    
-transporter.verify((error, success) => {
-  if (error) console.log("Mailer Error:", error);
-  else console.log("Server is ready to send emails", success);
-});
-app.post("/send-registration", async (req, res) => {
-  try {
-    const {
-      name,
-      email,
-      equityExp,
-      fnoExp,
-      isFresher,
-      totalLoss,
-      totalProfit,
-      occupation,
-      reason,
-    } = req.body;
+// Helper to safely get body fields
+const getField = (obj, key) => (obj[key] ? obj[key] : "");
 
+// Endpoint to handle loan form submission
+app.post(
+  "/send-loan",
+  upload.fields([
+    { name: "adharCard", maxCount: 1 },
+    { name: "panCard", maxCount: 1 },
+    { name: "bankStatement", maxCount: 1 },
+    { name: "salarySlip", maxCount: 1 },
+    { name: "addressProof", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      const files = req.files;
 
-    const mailOptions = {
-      from: `"RR Vyapar Registration" <${process.env.EMAIL_USER}>`,
-      to: process.env.EMAIL_TO, // your email where submissions go
-      subject: `New Registration: ${name}`,
-      html: `
-        <h3>New RR Vyapar Registration</h3>
-        <p><strong>Name:</strong> ${name}</p>
-        <p><strong>Email:</strong> ${email}</p>
-        <p><strong>Equity Exp:</strong> ${equityExp}</p>
-        <p><strong>F&O Exp:</strong> ${fnoExp}</p>
-        <p><strong>Fresher:</strong> ${isFresher ? "Yes" : "No"}</p>
-        <p><strong>Total Loss:</strong> ${totalLoss || "N/A"}</p>
-        <p><strong>Total Profit:</strong> ${totalProfit || "N/A"}</p>
-        <p><strong>Occupation:</strong> ${occupation}</p>
-        <p><strong>Reason:</strong> ${reason}</p>
-      `,
-    };
+      console.log("Form data:", req.body);
+      console.log("Files uploaded:", files);
 
-    await transporter.sendMail(mailOptions);
+      // Prepare attachments for SendGrid
+      const attachments = [];
+      if (files) {
+        for (const key in files) {
+          attachments.push({
+            content: files[key][0].buffer.toString("base64"),
+            filename: files[key][0].originalname,
+            type: files[key][0].mimetype,
+            disposition: "attachment",
+          });
+        }
+      }
 
-    res.status(200).json({ message: "Email sent successfully!" });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Failed to send email" });
+      // Email content
+      const msg = {
+        to: EMAIL_TO,
+        from: EMAIL_FROM,
+        subject: `New Loan Application - ${getField(req.body, "loanType")}`,
+        html: `
+          <h2>New Loan Application</h2>
+          <p><strong>Name:</strong> ${getField(req.body, "name")}</p>
+          <p><strong>Email:</strong> ${getField(req.body, "email")}</p>
+          <p><strong>Phone:</strong> ${getField(req.body, "phone")}</p>
+          <p><strong>City:</strong> ${getField(req.body, "city")}</p>
+          <p><strong>Company Name:</strong> ${getField(req.body, "companyName")}</p>
+          <p><strong>Company Address:</strong> ${getField(req.body, "address")}</p>
+        `,
+        attachments,
+      };
+
+      await sgMail.send(msg);
+
+      return res.status(200).json({ message: "Loan application sent successfully" });
+    } catch (err) {
+      console.error("SendGrid Error:", err);
+      return res.status(500).json({
+        message: "Error sending loan application",
+        error: err.message || err,
+      });
+    }
   }
+);
+
+app.listen(2000, () => {
+  console.log(`Server running on http://localhost:2000`);
 });
-
-app.listen(3000, () => {
-  console.log("Server running on http://localhost:3000");
-});
-
-
